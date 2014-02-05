@@ -285,6 +285,117 @@ vows.describe('OpenIDStrategy').addBatch({
     },
   },
   
+  'strategy handling an authorized request with custom attribute exchange attributes': {
+    topic: function() {
+      var strategy = new OpenIDStrategy({
+          ax: [
+            {
+              type: 'http://www.example.com/schema/firstname',
+              alias: 'firstname',
+              required: true
+            },
+            {
+              type: 'http://www.example.com/schema/lastname',
+              alias: 'lastname',
+              required: true
+            },
+            {
+              type: 'http://www.example.com/schema/friendly',
+              alias: 'friendly',
+              required: false
+            }
+          ],
+          profile: true,
+          returnURL: 'https://www.example.com/auth/openid/return'
+        },
+        function(identifier, profile, done) {
+          done(null, { identifier: identifier, displayName: profile.displayName, friendly: profile.friendly, name: profile.name, emails: profile.emails });
+        }
+      );
+      
+      // mock
+      strategy._relyingParty.verifyAssertion = function(url, callback) {
+        var params = {
+          'openid.ns.ax': 'http://openid.net/srv/ax/1.0',
+          'openid.ax.mode': 'fetch_response',
+          'openid.ax.type.firstname': 'http://www.example.com/schema/firstname',
+          'openid.ax.value.firstname': 'Testy',
+          'openid.ax.type.lastname': 'http://www.example.com/schema/lastname',
+          'openid.ax.value.lastname': 'Tester',
+          'openid.ax.type.friendly': 'http://www.example.com/schema/friendly',
+          'openid.ax.value.friendly': 'tester'
+        };
+        var result = { authenticated: true, claimedIdentifier: 'http://www.example.com/profiles/username' };
+        
+        this.extensions.forEach(function (extension) {
+          extension.fillResult(params, result);
+        });
+        
+        callback(null, result);
+      }
+      
+      return strategy;
+    },
+    
+    'should request the specified attributes': function(strategy) {
+      var ax;
+      
+      strategy._relyingParty.extensions.some(function (extension) {
+        if ('openid.ns.ax' in extension.requestParams) {
+          ax = extension;
+          return true;
+        }
+        return false;
+      });
+      
+      assert.ok(ax, 'No attribute exchange extension.');
+      assert.deepEqual(ax.requestParams, {
+        'openid.ns.ax': 'http://openid.net/srv/ax/1.0',
+        'openid.ax.mode': 'fetch_request',
+        'openid.ax.type.firstname': 'http://www.example.com/schema/firstname',
+        'openid.ax.type.lastname': 'http://www.example.com/schema/lastname',
+        'openid.ax.type.friendly': 'http://www.example.com/schema/friendly',
+        'openid.ax.required': 'firstname,lastname',
+        'openid.ax.if_available': 'friendly'
+      });
+    },
+    
+    'after augmenting with actions': {
+      topic: function(strategy) {
+        var self = this;
+        var req = {};
+        strategy.success = function(user) {
+          req.user = user;
+          self.callback(null, req);
+        }
+        strategy.fail = function() {
+          self.callback(new Error('should not be called'));
+        }
+        
+        req.query = {};
+        req.query['openid.mode'] = 'id_res'
+        process.nextTick(function () {
+          strategy.authenticate(req);
+        });
+      },
+      
+      'should not call fail' : function(err, req) {
+        assert.isNull(err);
+      },
+      'should authenticate' : function(err, req) {
+        assert.equal(req.user.identifier, 'http://www.example.com/profiles/username');
+      },
+      'should parse profile' : function(err, req) {
+        assert.equal(req.user.displayName, 'Testy Tester');
+        assert.equal(req.user.name.familyName, 'Tester');
+        assert.equal(req.user.name.givenName, 'Testy');
+        assert.lengthOf(req.user.emails, 1);
+        assert.isUndefined(req.user.emails[0].value);
+        assert.equal(req.user.friendly, 'tester');
+      },
+    },
+  },
+  
   'strategy handling an authorized request with profile option using arguments rather than arity': {
     topic: function() {
       var strategy = new OpenIDStrategy({
